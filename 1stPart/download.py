@@ -6,9 +6,11 @@
 
 import requests
 import zipfile
+import pickle
 import os
 import sys
 import csv
+import gzip
 from bs4 import BeautifulSoup
 from zipfile import ZipFile
 import numpy as np
@@ -81,26 +83,27 @@ coll_names = ["Region",                                     # viz klíče z regi
               "Kategorie řidiče",                           # p55a
               "Stav řidiče",                                # p57
               "Vnější ovlivnění řidiče",                    # p58
-              "Nepopsáno",                                  # a
-              "Nepopsáno",                                  # b
+              "Nepopsáno_a",                                # a
+              "Nepopsáno_b",                                # b
               "Souřadnice X",                               # d
               "Souřadnice Y",                               # e
-              "Nepopsáno",                                  # f
-              "Nepopsáno",                                  # g
-              "Nepopsáno",                                  # h
-              "Nepopsáno",                                  # i
-              "Nepopsáno",                                  # j
-              "Nepopsáno",                                  # k
-              "Nepopsáno",                                  # l
-              "Nepopsáno",                                  # n
-              "Nepopsáno",                                  # o
-              "Nepopsáno",                                  # p
-              "Nepopsáno",                                  # q
-              "Nepopsáno",                                  # g
-              "Nepopsáno",                                  # r
-              "Nepopsáno",                                  # s
-              "Nepopsáno",                                  # t
-              "Lokalita nehody"]                            # p5a
+              "Nepopsáno_f",                                # f
+              "Nepopsáno_g",                                # g
+              "Nepopsáno_h",                                # h
+              "Nepopsáno_i",                                # i
+              "Nepopsáno_j",                                # j
+              "Nepopsáno_k",                                # k
+              "Nepopsáno_l",                                # l
+              "Nepopsáno_n",                                # n
+              "Nepopsáno_o",                                # o
+              "Nepopsáno_p",                                # p
+              "Nepopsáno_q",                                # q
+              "Nepopsáno_g",                                # g
+              "Nepopsáno_r",                                # r
+              "Nepopsáno_s",                                # s
+              "Nepopsáno_t",                                # t
+              "Lokalita nehody",                            # p5a
+              ]
 
 
 def add_file_to_proccess(file):
@@ -143,42 +146,58 @@ class DataDownloader:
                             f.write(chunk)
 
     def parse_region_data(self, region):
-        if not region in regions_dict:
+        if not region in regions_dict:          # Check if region is valid
             print(f"Region {region} not known!", file=sys.stderr)
             return
-        if self.parsed_region[1][0] == region:
-            return self.parsed_region
-        csv_fname = regions_dict[region]
-        zip_files = [zip_file for zip_file in os.listdir(self.folder) if zipfile.is_zipfile(self.folder + '/' + zip_file)]
+
+        csv_fname = regions_dict[region]        # csv file name from dictionary
+        zip_files = [zip_file for zip_file in os.listdir(self.folder) if zipfile.is_zipfile(self.folder + '/' + zip_file)]  # filter non zip files from dir
         for file in files_to_process:
-            if not file in zip_files:
+            if not file in zip_files:   # Check if all files to be processed are downloaded (latest versions)
                 self.download_file('data/' + file)
-        for zip_file in zip_files:
+        rows = []
+        for zip_file in files_to_process:
             with ZipFile( self.folder + '/' + zip_file, 'r') as zip:
                 if not csv_fname in zip.namelist():
                     continue
                 with zip.open(csv_fname, 'r') as data:
                     reader = csv.reader(TextIOWrapper(data, encoding = "windows-1250"), delimiter=';')
+                    for row in reader:
+                        rows.append(row)
+        np_arr = np.array(rows, order='F')
+        list = [np.full(fill_value=region,shape=np_arr.shape[0])]
+        for i in range(np_arr.shape[1]): # TODO datové typy pro každý sloupec...
+            list.append(np_arr[:,i])
+        return coll_names.copy(), list.copy()
 
 
 
     def get_list(self, regions = None):
+        parsed_regions = []
+        if regions is None:
+            regions = regions_dict.keys()
         for reg in regions:
-            out_fname = self.cache_filename.format(region)
-            ...
-
+            out_fname = self.cache_filename.format(reg)
+            if self.parsed_region is not None:
+                if self.parsed_region[1][0] == reg:  # Check if region is parsed and cached
+                    parsed_regions.append(self.parsed_region[1])
+                    continue
+            elif os.path.exists(self.folder + '/' + out_fname): # Check if region is parsed in file
+                with gzip.open(self.folder + '/' + out_fname,'rb') as pkl:
+                    parsed_regions.append(pickle.load(pkl)[1])
+                    continue
+            else: # Parse region
+                self.parsed_region = self.parse_region_data(reg)
+                with gzip.open(self.folder + '/' + out_fname,'wb') as of: # Save result to cache
+                    pickle.dump(self.parsed_region,of)
+                parsed_regions.append(self.parsed_region[1])
+        it = iter(parsed_regions)
+        result = next(it)
+        for arrays in it:
+            for i, a in enumerate(result):
+                result[i] = np.concatenate((a,arrays[i]))
+        return coll_names.copy(), result
 if __name__ == "__main__":
-    #zip_files = [zip_file for zip_file in os.listdir('data/') if zipfile.is_zipfile('data/'+zip_file)]
-    #files = None
-    #f = zip_files[0]
-    #with ZipFile('data/' + f, 'r') as zip:
-    #    files = zip.namelist()
-    #    print(f"Reading {files[0]} file.")
-    #    with zip.open(files[0], 'r') as data:
-    #        reader = csv.reader(TextIOWrapper(data, encoding = "windows-1250"), delimiter=';')
-    #        for row in reader:
-    #            print(row)
-    #            break
     add_file_to_proccess("datagis-09-2020.zip")
     a = DataDownloader()
-    a.parse_region_data("PHA")
+    print(a.get_list(["PHA", "JHC", "JHM"]))
