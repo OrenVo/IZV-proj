@@ -2,6 +2,7 @@
 # coding=utf-8
 
 from matplotlib import pyplot as plt
+
 import pandas as pd
 import seaborn as sns
 import numpy as np
@@ -108,19 +109,29 @@ def get_dataframe(filename: str, verbose: bool = False) -> pd.DataFrame:
 # Ukol 2: následky nehod v jednotlivých regionech
 def plot_conseq(df: pd.DataFrame, fig_location: str = None, show_figure: bool = False):
     fig, ax = plt.subplots(4, 1, figsize=(7.75, 10.25))
-    ax[0].set_xlabel('Regiony')
-    ax[1].set_xlabel('Regiony')
-    ax[2].set_xlabel('Regiony')
-    ax[3].set_xlabel('Regiony')
+    fig.set_facecolor('#525050')
+    fig.suptitle('Následky nehod v jednotlivých regionech', color='#FFFFFF', alpha=.8)
     sns.barplot(x='region', y='p13a', data=df, order=df['region'].value_counts().index, ax=ax[0], ci=None, estimator=sum)
-    ax[0].set_ylabel('')
+    ax[0].set_ylabel('Úmrtí při nehodách', color='#FFFFFF', alpha=.8)
+    ax[0].set_facecolor('#545252')
+    ax[0].set_xlabel('Regiony', color='#FFFFFF', alpha=.8)
+    ax[0].tick_params(axis='both', which='both', colors='#FFFFFF')
     sns.barplot(x='region', y='p13b', data=df, order=df['region'].value_counts().index, ax=ax[1], ci=None, estimator=sum)
-    ax[1].set_ylabel('')
+    ax[1].set_ylabel('Těžce zranění', color='#FFFFFF', alpha=.8)
+    ax[1].set_facecolor('#545252')
+    ax[1].set_xlabel('Regiony', color='#FFFFFF', alpha=.8)
+    ax[1].tick_params(axis='both', which='both', colors='#FFFFFF')
     sns.barplot(x='region', y='p13c', data=df, order=df['region'].value_counts().index, ax=ax[2], ci=None, estimator=sum)
-    ax[2].set_ylabel('')
+    ax[2].set_ylabel('Lehce zranění', color='#FFFFFF', alpha=.8)
+    ax[2].set_facecolor('#545252')
+    ax[2].set_xlabel('Regiony', color='#FFFFFF', alpha=.8)
+    ax[2].tick_params(axis='both', which='both', colors='#FFFFFF')
     sns.countplot(x='region', data=df, order=df['region'].value_counts().index, ax=ax[3])
-    ax[3].set_ylabel('')
-
+    ax[3].set_ylabel('Celkový počet nehod', color='#FFFFFF', alpha=.8)
+    ax[3].set_facecolor('#545252')
+    ax[3].set_xlabel('Regiony', color='#FFFFFF', alpha=.8)
+    ax[3].tick_params(axis='both', which='both', colors='#FFFFFF')
+    fig.tight_layout()
     if fig_location:
         fig.savefig(fig_location)
     if show_figure is True:
@@ -130,7 +141,11 @@ def plot_conseq(df: pd.DataFrame, fig_location: str = None, show_figure: bool = 
 
 # Ukol3: příčina nehody a škoda
 def plot_damage(df: pd.DataFrame, fig_location: str = None, show_figure: bool = False):
-    pass
+    regions = ['STC', 'JHC', 'JHM', 'PHA']
+    fig, ax = plt.subplots(2, 2)
+    data = list()
+    for region in regions:
+        data.append(df.loc[df.region == region, ['region', 'p53', 'p12']])
 
 
 # Ukol 4: povrch vozovky
