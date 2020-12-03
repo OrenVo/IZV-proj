@@ -36,7 +36,7 @@ regions_dict = {
             "VYS" : "16.csv",
 }
 
-# Names of each collum in csv files
+# Names of each collum in csv files + region collum
 coll_names = ["Region",                                     # viz klíče z regions_dict
               "ID",                                         # p1; identifikační číslo
               "Druh pozemní komunikace",                    # p36
@@ -103,7 +103,8 @@ coll_names = ["Region",                                     # viz klíče z regi
               "t",                                          # t
               "Lokalita nehody",                            # p5a
               ]
-# Works only till year 2020 files for 2021 would not be added
+
+# Class download and process data or loads them from cache
 class DataDownloader:
 
     def __init__(self, url="https://ehw.fit.vutbr.cz/izv/", folder="data", cache_filename="data_{}.pkl.gz"):
@@ -113,27 +114,34 @@ class DataDownloader:
         if not os.path.exists(folder):
             os.makedirs(folder)
         self.cache_filename = cache_filename
-        self.parsed_region = None
+        self.parsed_region = None # This attribute store last region parsed
+        # self.data_downloaded
+        # If data were already downloaded it wouldn't download them again (This is for performance enhancement)
+        # download_data always connects to url and reads files names from it. So fun download_data should not be called more than once
         self.data_downloaded = False
         # Files processed by data downloader for last years
         # Those file names are hardcoded, because I don't expect that file names for older years would be changed
         # If those filenames would change these values needs to be changed as-well
-        self.files_to_process = ["datagis2016.zip", "datagis-rok-2017.zip", "datagis-rok-2018.zip", "datagis-rok-2019.zip"]
+        self.files_to_process = set(["datagis2016.zip", "datagis-rok-2017.zip", "datagis-rok-2018.zip", "datagis-rok-2019.zip"])
 
+    # Downloads data
     def download_data(self):
         """Downloads data from url to folder"""
+        if not os.path.exists(self.folder):
+            os.makedirs(self.folder)
         s = requests.session()
         jar = requests.cookies.RequestsCookieJar()
         s.cookies = jar
         resp = s.get(self.url, headers=self.headers)
         soup = BeautifulSoup(resp.content, 'html.parser')
-        download_links = [x['href'] for x in soup.find_all('a', class_= "btn btn-sm btn-primary")]
+        download_links = [x['href'] for x in soup.find_all('a', class_= "btn btn-sm btn-primary")] # links to zip files from url
         self.choose_files_to_download([x[5:] for x in download_links])
         for link in download_links: # Donwload only latest files (for years 2016-2019 are hardcoded to self.files_to_process, 2020 is choosed by function self.choose_files_to_download)
-            if link[5:] in self.files_to_process:
+            if link[5:] in self.files_to_process: # skip files that are not needed
                 self.download_file(link)
         self.data_downloaded = True
 
+    # TODO Works only till year 2020 files for 2021 would not automaticaly added to files_to_proccess
     # Choose latest file for year 2020
     def choose_files_to_download(self, files_names):
         files_20 = [f for f in files_names if "2020" in f]
@@ -142,10 +150,10 @@ class DataDownloader:
                 self.files_to_process.append(file)
                 return
         files_20.sort(reverse=True,key=lambda x:int(x[8:10]))
-        self.files_to_process.append(files_20[0])
+        self.files_to_process.add(files_20[0])
 
-
-
+    # Downloads one file from url + file_url_path if file is not already downloaded
+    # if you suspect that some file is damaged (or has been changed on server) delete it yourself and run download again
     def download_file(self, file_url_path):
         s = requests.session()
         jar = requests.cookies.RequestsCookieJar()
@@ -157,6 +165,8 @@ class DataDownloader:
                         if chunk:
                             f.write(chunk)
 
+    # Parse region data, if datas are not downloaded, it downloads them
+    # Note that this function doesn't read data from cache or self.parsed_region, neither it caches data
     def parse_region_data(self, region):
         if not self.data_downloaded:
             self.download_data()
@@ -166,10 +176,10 @@ class DataDownloader:
 
         csv_fname = regions_dict[region]        # csv file name from dictionary
         zip_files = [zip_file for zip_file in os.listdir(self.folder) if zipfile.is_zipfile(self.folder + '/' + zip_file)]  # filter non zip files from dir
-        rows = []
-        for zip_file in self.files_to_process:
+        rows = [] # filtered rows from all files
+        for zip_file in self.files_to_process: # procces data from every file downloaded
             with ZipFile( self.folder + '/' + zip_file, 'r') as zip:
-                if not csv_fname in zip.namelist():
+                if not csv_fname in zip.namelist(): # csv file missing
                     continue
                 with zip.open(csv_fname, 'r') as data:
                     reader = csv.reader(TextIOWrapper(data, encoding = "windows-1250"), delimiter=';')
@@ -179,7 +189,7 @@ class DataDownloader:
                             row[3] = np.datetime64(row[3])
                         except ValueError: # Skip whole row (cannot get date)
                             row[3] = np.datetime64('NaT')
-                        for r in [range(0,3), range(4,45), [len(row)-1]]:
+                        for r in [range(0,3), range(4,45), [len(row)-1]]: # faster than numpy data type conversion
                             for i in r:
                                 try:
                                     row[i] = int(row[i])
@@ -192,65 +202,56 @@ class DataDownloader:
                             except ValueError:
                                 row[i] = -1.0
                         rows.append(row)
-        np_arr = np.array(rows, order='F')
-        #for i in range(0,np_arr.shape[1]): #
+        np_arr = np.array(rows, order='F') # not unique
+        _,indexes = np.unique(np_arr[:,0], return_index=True) # remove duplicate ids from array (ids are unique for every accident)
+        np_arr = np_arr[indexes] # array filtered for missing/bad values and duplicates
+        #for i in range(0,np_arr.shape[1]): # This was slower
         #    np_arr[:, i][np_arr[:, i] == ''] = '-1' # Change missing value to int string representation will be representet as max for uint
-        list = [np.full(fill_value=region,shape=np_arr.shape[0])] # Create colum full of region name
-        try:
-            list.append(np.array(np_arr[:, 0], dtype=np.uint64, order='C'))
-            list.append(np.array(np_arr[:, 1], dtype=np.int8, order='C'))
-            list.append(np.array(np_arr[:, 2], dtype=np.int32, order='C'))
-            list.append(np.array(np_arr[:, 3], dtype=np.datetime64, order='C'))
-            list.append(np.array(np_arr[:, 4], dtype=np.uint8, order='C'))
-            # Time will be presented as it was given; unknown time will be set to -1
-            np_arr[:, 5][np_arr[:, 5] == '2560'] = '-1'
-            np_arr[:, 5][np_arr[:, 5] == '25'] = '-1'
-            list.append(np.array(np_arr[:, 5], dtype=np.int16, order='C'))
-
-            for i in range(6,16):
-                if i in range(12,16): # p12 - p13c uint16
-                    list.append(np.array(np_arr[:, i], dtype=np.uint16, order='C'))
-                else:       # p6 - p11 uint8
-                    list.append(np.array(np_arr[:, i], dtype=np.uint8, order='C'))
-
-            list.append(np.array(np_arr[:, 16], dtype=np.int64, order='C')) # Hmotná škoda p14
-            #np_arr[:, 34][np_arr[:, 34] == 'XX'] = '-1'
-            for i in range(17,41): # p15 - p45a - p
+        list = [np.full(fill_value=region,shape=np_arr.shape[0])] # Create collum full of region name
+        # Create numpy arrays for each collum
+        list.append(np.array(np_arr[:, 0], dtype=np.uint64, order='C'))
+        list.append(np.array(np_arr[:, 1], dtype=np.int8, order='C'))
+        list.append(np.array(np_arr[:, 2], dtype=np.int32, order='C'))
+        list.append(np.array(np_arr[:, 3], dtype=np.datetime64, order='C'))
+        list.append(np.array(np_arr[:, 4], dtype=np.uint8, order='C'))
+        # Time will be presented as it was given; unknown time will be set to -1
+        np_arr[:, 5][np_arr[:, 5] > 2500] = -1
+        list.append(np.array(np_arr[:, 5], dtype=np.int16, order='C'))
+        for i in range(6,16):
+            if i in range(12,16): # p12 - p13c uint16
+                list.append(np.array(np_arr[:, i], dtype=np.uint16, order='C'))
+            else:       # p6 - p11 uint8
                 list.append(np.array(np_arr[:, i], dtype=np.uint8, order='C'))
-            list.append(np.array(np_arr[:, 41], dtype=np.uint64, order='C')) # Škoda na vozidle p53
-            for i in range(42,45): # p55a - p58
-                list.append(np.array(np_arr[:, i], dtype=np.uint8, order='C'))
-
-            list.append(np.array(np_arr[:, 45], order='C')) # a
-            list.append(np.array(np_arr[:, 46], order='C')) # b
-
-            for i in range(47,51):
-                list.append(np.array(np_arr[:, i], dtype=np.single, order='C')) # d GPS X; e GPS Y; f and g some float
-
-            for i in range(51,63): # h - t store as string; its usually blank
-                list.append(np.array(np_arr[:, i], order='C'))
-            list.append(np.array(np_arr[:, 63], dtype=np.uint8, order='C'))
-        except ValueError as er:
-            print(region)
-            raise er
-        assert(len(list) == 65)
-        assert (len(list) == len(coll_names))
-
+        list.append(np.array(np_arr[:, 16], dtype=np.int64, order='C')) # Hmotná škoda p14
+        #np_arr[:, 34][np_arr[:, 34] == 'XX'] = '-1'
+        for i in range(17,41): # p15 - p45a - p
+            list.append(np.array(np_arr[:, i], dtype=np.uint8, order='C'))
+        list.append(np.array(np_arr[:, 41], dtype=np.uint64, order='C')) # Škoda na vozidle p53
+        for i in range(42,45): # p55a - p58
+            list.append(np.array(np_arr[:, i], dtype=np.uint8, order='C'))
+        list.append(np.array(np_arr[:, 45], order='C')) # a
+        list.append(np.array(np_arr[:, 46], order='C')) # b
+        for i in range(47,51):
+            list.append(np.array(np_arr[:, i], dtype=np.single, order='C')) # d GPS X; e GPS Y; f and g some float
+        for i in range(51,63): # h - t store as string; its usually blank
+            list.append(np.array(np_arr[:, i], order='C'))
+        list.append(np.array(np_arr[:, 63], dtype=np.uint8, order='C'))
         return coll_names.copy(), list.copy()
 
     def get_list(self, regions = None):
         parsed_regions = []
-        if regions is None:
+        if regions is None: # process every region
             regions = regions_dict.keys()
         for reg in regions:
             out_fname = self.cache_filename.format(reg)
-            if self.parsed_region is not None:
+            if self.parsed_region is not None:  # check if region is stored in attribute
                 if np.all(self.parsed_region[1][0] == reg):  # Check if region is parsed and cached
                     parsed_regions.append(self.parsed_region[1])
                     continue
             if os.path.exists(self.folder + '/' + out_fname): # Check if region is parsed and cached in file
                 with gzip.open(self.folder + '/' + out_fname,'rb') as pkl:
-                    parsed_regions.append(pickle.load(pkl)[1])
+                    self.parsed_region = pickle.load(pkl)
+                    parsed_regions.append(self.parsed_region[1])
                     continue
             self.parsed_region = self.parse_region_data(reg)
             with gzip.open(self.folder + '/' + out_fname,'wb') as of: # Save result to cache
@@ -268,15 +269,13 @@ if __name__ == "__main__":
     regions = ["PHA", "JHC", "JHM"]
     a = DataDownloader()
     a.download_data()
-    start = time.time()
     data = a.get_list(regions)
     print("Sloupce:")
     for c in data[0]:
         print(c, end=" | ")
     print("\n\nKraj | počet záznamů" )
-    print(regions[0], " |", np.count_nonzero(data[1][0] == regions[0]))
-    print(regions[1], " |", np.count_nonzero(data[1][0] == regions[1]))
-    print(regions[2], " |", np.count_nonzero(data[1][0] == regions[2]))
+    for reg in regions:
+        print(reg, " |", np.count_nonzero(data[1][0] == reg))
     print("\nCelkem záznamů:",data[1][0].shape[0])
 
 
